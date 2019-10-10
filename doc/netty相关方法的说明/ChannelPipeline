@@ -1,0 +1,21 @@
+ChannelPipeline在Netty中的默认实现DefaultChannelPipeline。
+虽然说ChannelPipeline是ChannelHandler的容器，但是ChannelPipeline并不是直接持有ChannelHandler的，ChannelHandler会被封装成ChannelHandlerContext，ChannelPipeline则使用双链表持有一个个的ChannelHandlerContext。
+
+除了构造函数，我们将DefaultChannelPipeline剩下的方法分为三类：
+    1、负责向pipeline中添加、删除或者替换handler
+        添加Pipeline中的某个handler：
+            addAfter
+            addBefore
+            addFirst
+            addLast
+        移除Pipeline中的某个handler：
+            remove
+            removeFirst
+            removeIfExists
+            removeLast
+        替换Pipeline中的某个handler：
+            replace
+    2、负责触发Inbound handler
+
+    3、负责触发Outbound handler
+

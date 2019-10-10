@@ -1,0 +1,9 @@
+ChannelInitializer：
+    主要用于channel初始化，一般用于在channelRegistered方法中向channel的pipeline中注册相关的handler，
+    ChannelInitializer的特别之处是注册完handler之后，会将自己从pipeline的handler链表中删除，仅仅会被执行一次：
+
+HeadContext：
+    扩展了AbstractChannelHandlerContext，也实现了ChannelOutboundHandler，ChannelInboundHandler，既是Inbound handler，也是outbound handler。
+
+TailContext：
+    扩展了AbstractChannelHandlerContext，并实现了ChannelInboundHandler接口，是一个Inbound handler，因为Inbound事件从前往后调用Inbound handler，所以TailContext是最后一个被调用的Inbound handler

@@ -9,11 +9,22 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
+import io.netty.channel.group.ChannelGroup;
+import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.DelimiterBasedFrameDecoder;
+import io.netty.handler.codec.Delimiters;
 import io.netty.handler.codec.http.*;
+import io.netty.handler.codec.string.StringDecoder;
+import io.netty.handler.codec.string.StringEncoder;
+import io.netty.handler.timeout.IdleState;
+import io.netty.handler.timeout.IdleStateEvent;
+import io.netty.handler.timeout.IdleStateHandler;
 import io.netty.util.CharsetUtil;
+import io.netty.util.ReferenceCountUtil;
+import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -67,6 +78,7 @@ public class NettyServer {
         @Override
         protected void initChannel(SocketChannel ch) throws Exception {
             ChannelPipeline cp = ch.pipeline();
+            cp.addLast(new IdleStateHandler(4,5,10));
             cp.addLast(new RpcDecoder(Request.class, new ProtobufSerializer()));
             cp.addLast(new RpcEncoder(Response.class, new ProtobufSerializer()));
             cp.addLast(new RpcNettyServerHandler());
@@ -76,23 +88,59 @@ public class NettyServer {
     @Slf4j
     private static class RpcNettyServerHandler extends SimpleChannelInboundHandler<Request> {
 
+        private static ChannelGroup channelGroup = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
+
+        private int reconnection = 1;
+        private static final Integer MAX_RECONNECTION = 5;
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, Request msg) throws Exception {
             //todo  server handler
-            Channel channel = ctx.channel();//获取当前channel
-            System.out.println(channel.remoteAddress()); //显示客户端的远程地址
-            Response response=new Response();
-            response.setRequestId("123456");
-            response.setException(null);
-            response.setResult(new String("docker"));
-            //把响应刷到客户端
+            //接受到的请求
+            System.out.println(msg);
+            //返回一个response
+            Response response = Response.builder().state(8888).build();
             ctx.writeAndFlush(response);
+        }
+
+        /**
+         * 超时处理 如果5秒没有接受客户端的心跳，就触发; 如果超过两次，则直接关闭;
+         */
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object obj) throws Exception {
+            if (obj instanceof IdleStateEvent) {
+                IdleStateEvent event = (IdleStateEvent) obj;
+                // 如果写通道处于空闲状态,就发送心跳命令
+                if (IdleState.WRITER_IDLE.equals(event.state())) {
+                    log.info("已经10秒没有接收到客户端的信息了:{}", reconnection);
+                    if (reconnection > MAX_RECONNECTION) {
+                        log.warn("关闭这个不活跃的channel");
+                        ctx.channel().close();
+                    }
+                    reconnection++;
+                }
+            }else {
+                super.userEventTriggered(ctx, obj);
+            }
         }
 
         @Override
         public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-            log.error("server caught exception", cause);
+            log.error("rpc server caught exception", cause);
             ctx.close();
         }
+
+
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) throws Exception {
+            Channel channel = ctx.channel();
+            System.out.println(channel.remoteAddress() + "上线");
+        }
+
+        @Override
+        public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+            Channel channel = ctx.channel();
+            System.out.println(channel.remoteAddress() + "下线");
+        }
+
     }
 }
