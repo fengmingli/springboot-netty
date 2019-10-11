@@ -9,30 +9,25 @@ import io.netty.bootstrap.ServerBootstrap;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
-import io.netty.channel.group.ChannelGroup;
-import io.netty.channel.group.DefaultChannelGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
-import io.netty.handler.codec.DelimiterBasedFrameDecoder;
-import io.netty.handler.codec.Delimiters;
-import io.netty.handler.codec.http.*;
-import io.netty.handler.codec.string.StringDecoder;
-import io.netty.handler.codec.string.StringEncoder;
 import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
-import io.netty.util.CharsetUtil;
-import io.netty.util.ReferenceCountUtil;
-import io.netty.util.concurrent.GlobalEventExecutor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+
+import java.nio.charset.Charset;
+import java.util.Date;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author lifengming
  * @since 2019.10.08
  */
 @Component
+@Slf4j
 public class NettyServer {
     /**
      * 设置服务端口
@@ -50,7 +45,7 @@ public class NettyServer {
 
     private static ServerBootstrap serverBootstrap = new ServerBootstrap();
 
-    public void startServer() {
+    void startServer() {
         try {
             serverBootstrap.group(bossGroup, workGroup)
                     .channel(NioServerSocketChannel.class)
@@ -78,49 +73,43 @@ public class NettyServer {
         @Override
         protected void initChannel(SocketChannel ch) throws Exception {
             ChannelPipeline cp = ch.pipeline();
-            cp.addLast(new IdleStateHandler(4,5,10));
+            cp.addLast(new IdleStateHandler(0, 0, 5, TimeUnit.SECONDS));
+            //添加 IdleStateHandler 传播的 IdleStateEvent 的处理器
+            cp.addLast(new HeartbeatHandler());
             cp.addLast(new RpcDecoder(Request.class, new ProtobufSerializer()));
             cp.addLast(new RpcEncoder(Response.class, new ProtobufSerializer()));
+            //添加普通入站处理器
             cp.addLast(new RpcNettyServerHandler());
         }
     }
 
-    @Slf4j
-    private static class RpcNettyServerHandler extends SimpleChannelInboundHandler<Request> {
+    private static class HeartbeatHandler extends ChannelInboundHandlerAdapter {
+        private static final ByteBuf HEARTBEAT_SEQUENCE = Unpooled.unreleasableBuffer(Unpooled.copiedBuffer("HEARTBEAT", Charset.forName("UTF-8")));
 
-        private static ChannelGroup channelGroup = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
-
-        private int reconnection = 1;
-        private static final Integer MAX_RECONNECTION = 5;
-        @Override
-        protected void channelRead0(ChannelHandlerContext ctx, Request msg) throws Exception {
-            //todo  server handler
-            //接受到的请求
-            System.out.println(msg);
-            //返回一个response
-            Response response = Response.builder().state(8888).build();
-            ctx.writeAndFlush(response);
-        }
-
-        /**
-         * 超时处理 如果5秒没有接受客户端的心跳，就触发; 如果超过两次，则直接关闭;
-         */
         @Override
         public void userEventTriggered(ChannelHandlerContext ctx, Object obj) throws Exception {
+            log.info("检测到客户端心跳:{}", new Date());
             if (obj instanceof IdleStateEvent) {
-                IdleStateEvent event = (IdleStateEvent) obj;
-                // 如果写通道处于空闲状态,就发送心跳命令
-                if (IdleState.WRITER_IDLE.equals(event.state())) {
-                    log.info("已经10秒没有接收到客户端的信息了:{}", reconnection);
-                    if (reconnection > MAX_RECONNECTION) {
-                        log.warn("关闭这个不活跃的channel");
-                        ctx.channel().close();
-                    }
-                    reconnection++;
-                }
-            }else {
+                //当捕获到 IdleStateEvent，发送心跳到远端，并添加一个监听器，如果发送失败就关闭服务端连接
+                ctx.writeAndFlush(HEARTBEAT_SEQUENCE.duplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+            } else {
+                //如果捕获到的时间不是一个 IdleStateEvent，就将该事件传递到下一个处理器
                 super.userEventTriggered(ctx, obj);
             }
+        }
+
+    }
+
+    @ChannelHandler.Sharable
+    private static class RpcNettyServerHandler extends SimpleChannelInboundHandler<Request> {
+        @Override
+        public void channelRead0(ChannelHandlerContext ctx, Request msg) throws Exception {
+            //todo  server handler
+            //打印接受到的请求
+            log.info("接受到客户端的信息:{}", msg);
+            //返回一个response
+            Response response = Response.builder().state(2).build();
+            ctx.writeAndFlush(response);
         }
 
         @Override
@@ -133,13 +122,13 @@ public class NettyServer {
         @Override
         public void channelActive(ChannelHandlerContext ctx) throws Exception {
             Channel channel = ctx.channel();
-            System.out.println(channel.remoteAddress() + "上线");
+            log.info("{}:上线", channel.remoteAddress());
         }
 
         @Override
         public void channelInactive(ChannelHandlerContext ctx) throws Exception {
             Channel channel = ctx.channel();
-            System.out.println(channel.remoteAddress() + "下线");
+            log.info("{}:下线", channel.remoteAddress());
         }
 
     }

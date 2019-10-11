@@ -6,23 +6,32 @@ import cn.lifengming.netty.core.model.Request;
 import cn.lifengming.netty.core.model.Response;
 import cn.lifengming.netty.core.serialize.ProtobufSerializer;
 import io.netty.bootstrap.Bootstrap;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioSocketChannel;
-import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.IdleStateHandler;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.net.InetSocketAddress;
+import java.nio.charset.Charset;
+import java.util.Date;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static java.util.concurrent.Executors.*;
 
 /**
+ * <p>
+ * channelActive()——在到服务器的连接已经建立之后将被调用；
+ * channelRead0()——当从服务器接收到一条消息时被调用；
+ * exceptionCaught()——在处理过程中引发异常时被调用。
+ * <p/>
+ *
  * @author lifengming
  * @since 2019.10.08
  */
@@ -98,44 +107,41 @@ public class NettyClient {
         @Override
         protected void initChannel(SocketChannel ch) throws Exception {
             ChannelPipeline cp = ch.pipeline();
-            cp.addLast(new IdleStateHandler(4,5,10));
+            cp.addLast(new IdleStateHandler(0, 0, 5, TimeUnit.SECONDS));
+            cp.addLast(new HeartbeatHandler());
             cp.addLast(new RpcEncoder(Request.class, new ProtobufSerializer()));
             cp.addLast(new RpcDecoder(Response.class, new ProtobufSerializer()));
             cp.addLast(new RpcClientResponseHandler());
         }
     }
 
+    @Slf4j
+    private static class HeartbeatHandler extends ChannelInboundHandlerAdapter {
+        private static final ByteBuf HEARTBEAT_SEQUENCE = Unpooled.unreleasableBuffer(Unpooled.copiedBuffer("HEARTBEAT", Charset.forName("UTF-8")));
+
+        @Override
+        public void userEventTriggered(ChannelHandlerContext ctx, Object obj) throws Exception {
+            log.info("检测到服务端心跳:{}", new Date());
+            if (obj instanceof IdleStateEvent) {
+                //当捕获到 IdleStateEvent，发送心跳到远端，并添加一个监听器，如果发送失败就关闭服务端连接
+                ctx.writeAndFlush(HEARTBEAT_SEQUENCE.duplicate()).addListener(ChannelFutureListener.CLOSE_ON_FAILURE);
+            } else {
+                //如果捕获到的时间不是一个 IdleStateEvent，就将该事件传递到下一个处理器
+                super.userEventTriggered(ctx, obj);
+            }
+        }
+
+    }
+
+    @ChannelHandler.Sharable
     private static class RpcClientResponseHandler extends SimpleChannelInboundHandler<Response> {
-
-        private int reconnection = 1;
-        private static final Integer MAX_RECONNECTION = 5;
-
         @Override
         public void channelRead0(ChannelHandlerContext ctx, Response msg) throws Exception {
             //todo  client response handler
-            System.out.println(msg);
-            Request request = Request.builder().name("docker").state(2).build();
-            ctx.writeAndFlush(request);
-        }
-
-        /**
-         * 使用事件触发器发送心跳
-         */
-        @Override
-        public void userEventTriggered(ChannelHandlerContext ctx, Object obj) throws Exception {
-            if (obj instanceof IdleStateEvent) {
-                IdleStateEvent event = (IdleStateEvent) obj;
-                // 如果写通道处于空闲状态,就发送心跳命令
-                if (IdleState.WRITER_IDLE.equals(event.state())) {
-                    log.info("已经10秒没有接收到客户端的信息了:{}", reconnection);
-                    if (reconnection > MAX_RECONNECTION) {
-                        log.warn("关闭这个不活跃的channel");
-                        ctx.channel().close();
-                    }
-                    reconnection++;
-                }
-            }else {
-                super.userEventTriggered(ctx, obj);
+            try {
+                log.info("receive data{}:", msg);
+            } catch (Exception e) {
+                e.printStackTrace();
             }
         }
 
@@ -144,6 +150,15 @@ public class NettyClient {
             log.error("rpc client caught exception", cause);
             ctx.close();
         }
-    }
 
+        /**
+         * 在到服务器的连接已经建立之后将被调用
+         */
+        @Override
+        public void channelActive(ChannelHandlerContext ctx) throws Exception {
+            log.info("Established connection with the remote Server.");
+            Request docker = Request.builder().name("docker").age(20).build();
+            ctx.writeAndFlush(docker);
+        }
+    }
 }

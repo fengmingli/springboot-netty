@@ -11,6 +11,7 @@ import lombok.*;
 @NoArgsConstructor
 @Builder
 @Getter
+@ToString
 public class Request {
     String name;
     String requestId;

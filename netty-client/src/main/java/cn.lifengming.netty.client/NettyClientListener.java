@@ -19,7 +19,7 @@ public class NettyClientListener implements ApplicationListener<ContextRefreshed
     @Override
     public void onApplicationEvent(ContextRefreshedEvent contextRefreshedEvent) {
         if (contextRefreshedEvent.getApplicationContext().getParent() == null) {
-            this.nettyClient.startClientServer();
+            nettyClient.startClientServer();
         }
     }
 }
